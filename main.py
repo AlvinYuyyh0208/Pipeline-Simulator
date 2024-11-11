@@ -1,32 +1,147 @@
-# Helper function to parse binary instructions into Instruction objects
-def parse_binary_instruction(binary_string):
-    opcode = binary_string[:6]  # Get the opcode from the binary string
-    # Decoding the opcode to identify instruction type and parameters
-    # This is a simplified placeholder; you would need a complete mapping for each opcode
-    if opcode == "000000":  # This is usually the R-type format
-        # Parse binary string into components for R-type instructions
-        # Example: opcode (6), rs (5), rt (5), rd (5), shamt (5), funct (6)
-        funct = binary_string[26:]  # Last 6 bits for R-type instructions
-        # Assuming specific functionality based on funct field as an example
-        if funct == "100000":  # 'add' operation
-            return Instruction(name="Add", src1="R1", src2="R2", dest="R3", opcode="add")
-    elif opcode == "001000":  # This could be an I-type 'addi' instruction
-        return Instruction(name="Addi", src1="R1", dest="R2", opcode="addi")
-    # Continue parsing for other opcodes (load, store, branch, etc.)
-    return Instruction(name="NOP")  # Default to NOP if unknown
+# error
+# pipeline register should +4
+# instruction in pipeline stage should move to next stage
+
+def parse_instruction(word):
+    opcode = word & 0x7f  # [6,0]
+    rd = (word >> 7) & 0x1f  # [11,7]
+    funct3 = (word >> 12) & 0x7  # [14,12]
+    rs1 = (word >> 15) & 0x1f  # [19,15]
+    rs2 = (word >> 20) & 0x1f  # [24,20]
+    funct7 = (word >> 25) & 0x7f  # [31,25]
+
+    imme_i = (word >> 20) & 0xfff  # [31,20]
+    imme_s = ((word >> 25) & 0x7f) << 5 | ((word >> 7) & 0x1f)
+    imme_b = ((word >> 31) & 0x1) << 12 | ((word >> 25) & 0x3f) << 5 | ((word >> 8) & 0xf) << 1 | (
+            (word >> 7) & 0x1) << 11
+    imme_u = ((word >> 12) & 0xfffff) << 12
+    imme_j = ((word >> 31) & 0x1) << 20 | ((word >> 21) & 0x3ff) << 1 | ((word >> 20) & 0x1) << 11 | (
+            (word >> 12) & 0xff) << 12
+
+    # sign extend
+    if imme_i & (1 << 11):
+        imme_i |= ~0xFFF
+
+    if imme_s & (1 << 11):
+        imme_s |= ~0xFFF
+
+    if imme_b & (1 << 12):
+        imme_b |= ~0x1FFF
+
+    if imme_j & (1 << 20):
+        imme_j |= ~0xFFFFF
+
+    return opcode, rd, funct3, rs1, rs2, funct7, imme_i, imme_s, imme_b, imme_u, imme_j
 
 
-# Load instructions from the file and parse them
-def load_instructions_from_file(file_path):
+def disassemble_instruction(opcode, rd, funct3, rs1, rs2, funct7, imme_i, imme_s, imme_b, imme_u, imme_j):
+    # R-type instruction
+    if opcode == 51:
+        if funct7 == 0 and funct3 == 0:
+            return f"ADD x{rd}, x{rs1}, x{rs2}"
+        elif funct7 == 32 and funct3 == 0:
+            return f"SUB x{rd}, x{rs1}, x{rs2}"
+        elif funct3 == 1 and funct7 == 0:
+            return f"SLL x{rd}, x{rs1}, {rs2}"
+        elif funct3 == 5 and funct7 == 0:
+            return f"SRL x{rd}, x{rs1}, {rs2}"
+        elif funct3 == 5 and funct7 == 32:
+            return f"SRA x{rd}, x{rs1}, {rs2}"
+        elif funct3 == 7 and funct7 == 0:
+            return f"AND x{rd}, x{rs1}, x{rs2}"
+        elif funct3 == 6 and funct7 == 0:
+            return f"OR x{rd}, x{rs1}, x{rs2}"
+        elif funct3 == 4 and funct7 == 0:
+            return f"XOR x{rd}, x{rs1}, x{rs2}"
+        elif funct3 == 2 and funct7 == 0:
+            return f"SLT x{rd}, x{rs1}, x{rs2}"
+        elif funct3 == 3 and funct7 == 0:
+            return f"SLTU  x{rd}, x{rs1}, x{rs2}"
+
+
+    # I-type instruction
+    elif opcode == 19:
+        if funct3 == 0:
+            return f"ADDI x{rd}, x{rs1}, {imme_i}"
+        elif funct3 == 7:
+            return f"ANDI x{rd}, x{rs1}, {imme_i}"
+        elif funct3 == 6:
+            return f"ORI x{rd}, x{rs1}, {imme_i}"
+        elif funct3 == 4:
+            return f"XORI x{rd}, x{rs1}, {imme_i}"
+        elif funct3 == 2:
+            return f"SLTI x{rd}, x{rs1}, {imme_i}"
+
+    # Load/Store instructions
+    elif opcode == 3:
+        if funct3 == 2:
+            return f"LW x{rd}, {imme_i}(x{rs1})"
+    elif opcode == 35:
+        if funct3 == 2:
+            return f"SW x{rs2}, {imme_s}(x{rs1})"
+
+    # Branch instructions
+    elif opcode == 99:
+        if funct3 == 0:
+            return f"BEQ x{rs1}, x{rs2}, {imme_b}"
+        elif funct3 == 1:
+            return f"BNE x{rs1}, x{rs2}, {imme_b}"
+        elif funct3 == 4:
+            return f"BLT x{rs1}, x{rs2}, {imme_b}"
+        elif funct3 == 5:
+            return f"BGE x{rs1}, x{rs2}, {imme_b}"
+        elif funct3 == 6:
+            return f"BLTU x{rs1}, x{rs2}, {imme_b}"
+        elif funct3 == 7:
+            return f"BGEU x{rs1}, x{rs2}, {imme_b}"
+
+    # Jump instructions
+    elif opcode == 111:
+        return f"JAL x{rd}, {imme_j}"
+    elif opcode == 103:
+        return f"JALR x{rd}, x{rs1}, {imme_i}"
+
+    return "0"
+
+
+def format_instruction_groups(binary_str):
+    groups = [binary_str[:6], binary_str[6:12], binary_str[12:17], binary_str[17:20], binary_str[20:25],
+              binary_str[25:]]
+    return ' '.join(groups)
+
+
+# New function to parse and load instructions into the simulator
+def load_and_disassemble_instructions(input_filename):
     instructions = []
-    with open(file_path, 'r') as file:
-        for line in file:
-            binary_string = line.strip()
-            if binary_string:  # Only parse non-empty lines
-                instruction = parse_binary_instruction(binary_string)
-                instructions.append(instruction)
+    current_address = 496
+
+    with open(input_filename, 'r') as infile:
+        for line in infile:
+            word = int(line.strip(), 2)
+            # Parse and disassemble the binary instruction
+            opcode, rd, funct3, rs1, rs2, funct7, imme_i, imme_s, imme_b, imme_u, imme_j = parse_instruction(word)
+            instruction_str = disassemble_instruction(opcode, rd, funct3, rs1, rs2, funct7, imme_i, imme_s, imme_b,
+                                                      imme_u, imme_j)
+            binary_str = format_instruction_groups(line.strip())
+
+            # Create an Instruction object with disassembled information
+            instruction = Instruction(
+                name=instruction_str,
+                src1=f"x{rs1}" if rs1 is not None else None,
+                src2=f"x{rs2}" if rs2 is not None else None,
+                dest=f"x{rd}" if rd is not None else None,
+                opcode=opcode
+            )
+            instructions.append(instruction)
+
+            current_address += 4
+            if current_address == 700:
+                break  # Stop at address 700 as specified
+
     return instructions
 
+
+# disassemble('fibonacci_input.txt', 'output.txt')
 
 # forwarding
 class Instruction:
@@ -146,9 +261,8 @@ class MIPSPipelineSimulator:
             self.run_cycle()
 
 
-
 # Initialize and run the simulator
 simulator = MIPSPipelineSimulator()
-instructions = load_instructions_from_file("fibonacci_input.txt")
+instructions = load_and_disassemble_instructions("fibonacci_input.txt")
 simulator.load_instructions(instructions)
 simulator.run(max_cycles=40)
